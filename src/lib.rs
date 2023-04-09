@@ -38,11 +38,11 @@ struct Request {
 #[derive(Clone)]
 enum RequestData {
     None,
-    From(HashMap<String, String>),
+    Form(HashMap<String, String>),
     Multipart(MutliForm),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct MutliForm {
     text: HashMap<String, String>,
     file: HashMap<String, String>,
@@ -50,6 +50,38 @@ struct MutliForm {
 
 impl LuaUserData for Request {
     fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
+        methods.add_method_mut("header", |_, this, (key, value): (String, String)| {
+            this.headers.0.insert(key, value);
+            Ok(())
+        });
+
+        methods.add_method_mut("form", |_, this, form: HashMap<String, String>| {
+            this.data = RequestData::Form(form);
+            Ok(())
+        });
+
+        methods.add_method_mut("multi_text", |_, this, (key, value): (String, String)| {
+            let data_type = this.data.clone();
+            if let RequestData::Multipart(mut v) = data_type {
+                v.text.insert(key, value);
+                this.data = RequestData::Multipart(v);
+            } else {
+                this.data = RequestData::Multipart(MutliForm::default());
+            }
+            Ok(())
+        });
+
+        methods.add_method_mut("multi_file", |_, this, (key, value): (String, String)| {
+            let data_type = this.data.clone();
+            if let RequestData::Multipart(mut v) = data_type {
+                v.file.insert(key, value);
+                this.data = RequestData::Multipart(v);
+            } else {
+                this.data = RequestData::Multipart(MutliForm::default());
+            }
+            Ok(())
+        });
+
         methods.add_method("send", |_, this, ()| {
             let client = reqwest::blocking::Client::new();
 
@@ -58,7 +90,7 @@ impl LuaUserData for Request {
                 "POST" => client.post(&this.url),
                 "PUT" => client.put(&this.url),
                 _ => {
-                    panic!("hello dioxus");
+                    panic!("Unsopprted request method");
                 }
             };
 
@@ -67,7 +99,7 @@ impl LuaUserData for Request {
 
             let request = match &this.data {
                 RequestData::None => request,
-                RequestData::From(f) => request.form(&f),
+                RequestData::Form(f) => request.form(&f),
                 RequestData::Multipart(f) => {
                     let mut request = request;
                     let text = f.text.clone();
@@ -111,26 +143,28 @@ impl LuaUserData for Request {
     }
 }
 
-fn get(url: String) -> Request {
-    Request {
+fn get(_lua: &Lua, url: String) -> LuaResult<Request> {
+    Ok(Request {
         method: "GET".into(),
         url: url.into(),
         data: RequestData::None,
         headers: Headers(HashMap::new()),
-    }
+    })
 }
 
-fn post(url: String) -> Request {
-    Request {
+fn post(_lua: &Lua, url: String) -> LuaResult<Request> {
+    Ok(Request {
         method: "POST".into(),
         url: url.into(),
         data: RequestData::None,
         headers: Headers(HashMap::new()),
-    }
+    })
 }
 
 #[mlua::lua_module]
 fn my_module(lua: &Lua) -> LuaResult<LuaTable> {
     let exports = lua.create_table()?;
+    exports.set("get", lua.create_function(get)?)?;
+    exports.set("post", lua.create_function(post)?)?;
     Ok(exports)
 }
